@@ -24,12 +24,45 @@ import { tagSessionWithHaiku, clusterAllProjects } from './topic-clusterer.js';
 const PER_SESSION_DEBOUNCE_MS = 5 * 1000;
 const NIGHTLY_HOUR = 3;
 
+// Worst-case spend ceiling for the per-session Haiku tagging path. Without
+// this, a misbehaving titler emitting `titled` for the same project all day
+// (or a flapping session that gets retitled hundreds of times across server
+// restarts) would silently rack up Haiku calls. 200 calls/project/day at the
+// brief's quoted ~$0.0005 each caps daily spend at ~$0.10/project even in
+// the pathological case. Override via DISPATCH_TOPIC_DAILY_CAP if needed.
+const PER_PROJECT_DAILY_CAP = (() => {
+  const fromEnv = Number(process.env.DISPATCH_TOPIC_DAILY_CAP);
+  if (Number.isInteger(fromEnv) && fromEnv > 0) return fromEnv;
+  return 200;
+})();
+
 const state = {
   started: false,
   nightlyTimer: null,
   perSessionTimers: new Map(),
   inflight: new Set(),
+  // Map<slug, { date: 'YYYY-MM-DD', count: number }> tracking how many
+  // per-session Haiku tag calls fired for each project today.
+  dailyCounters: new Map(),
 };
+
+function todayKey(now = new Date()) {
+  return now.toISOString().slice(0, 10);
+}
+
+function consumeDailyBudget(slug) {
+  const today = todayKey();
+  const existing = state.dailyCounters.get(slug);
+  if (!existing || existing.date !== today) {
+    state.dailyCounters.set(slug, { date: today, count: 1 });
+    return true;
+  }
+  if (existing.count >= PER_PROJECT_DAILY_CAP) {
+    return false;
+  }
+  existing.count++;
+  return true;
+}
 
 function nextNightlyDelayMs(now = new Date()) {
   const target = new Date(now);
@@ -68,6 +101,12 @@ function onTitled(payload) {
   if (existing) clearTimeout(existing);
   const timer = setTimeout(async () => {
     state.perSessionTimers.delete(key);
+    if (!consumeDailyBudget(payload.slug)) {
+      console.warn(
+        `[topic-clusterer] per-project daily cap (${PER_PROJECT_DAILY_CAP}) hit for ${payload.slug}; skipping tag for ${payload.sessionId}`,
+      );
+      return;
+    }
     state.inflight.add(key);
     try {
       await tagSessionWithHaiku({ sessionId: payload.sessionId, slug: payload.slug });
@@ -106,4 +145,4 @@ export function stop() {
 
 start();
 
-export const __internal = { state, nextNightlyDelayMs, onTitled };
+export const __internal = { state, nextNightlyDelayMs, onTitled, consumeDailyBudget, PER_PROJECT_DAILY_CAP };

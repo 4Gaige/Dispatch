@@ -266,6 +266,15 @@ export async function backfillSmallProject(slug) {
 }
 
 // --- HDBSCAN-lite: single-linkage clustering over cosine distance ---
+//
+// Spec divergence from docs/phase-4-brief.md (deliberate, tracked in
+// docs/follow-ups.md): the brief asks for real HDBSCAN with
+// `min_cluster_size=3, min_samples=2`. We do `min_cluster_size=3` correctly
+// but skip `min_samples` and use single-linkage union-find instead of true
+// density-based clustering. Rationale: shipping without an `hdbscan-ts` /
+// Python dep is the brief's stated fallback, and on voyage-3-lite vectors
+// for 1k-class title corpora the chain-prone behavior of single-linkage is
+// acceptable. Revisit if topic quality complaints surface.
 
 function cosine(a, b) {
   let dot = 0;

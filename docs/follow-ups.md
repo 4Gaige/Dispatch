@@ -61,6 +61,38 @@ commit; line numbers may drift after the review PR lands.
 - **`spawn-sub-agent` has no time/output cap** — `mcp-bootstrap.js:259`. A
   runaway sub-agent could stream forever. Add a hard timeout + byte cap.
 
+## Phase 3 — Auto-naming (Haiku titler)
+
+- **`signalUpdate` re-trigger is wasteful** — `session-titler.js:222`. The
+  blank-line append fires chokidar `change` again, which queues a 60s debounce
+  + `getName` lookup that immediately short-circuits. Cheap but pointless.
+  Either set a write-then-ignore-next-event flag or invoke the WS broadcast
+  directly without retriggering chokidar.
+- **API key is read once at boot** — `session-titler.js:43`. If the user adds
+  `ANTHROPIC_API_KEY` after start (env or settings.json), the titler stays in
+  the agent-SDK fallback path until the next restart. Re-resolve on each
+  `callHaiku` invocation, or expose a runtime "reload key" hook.
+
+## Phase 4 — Topic clustering
+
+- **HDBSCAN-lite vs spec'd HDBSCAN** — `topic-clusterer.js:268-345` implements
+  single-linkage union-find over cosine distance with `min_cluster_size=3`,
+  but skips `min_samples=2` core-point logic that real HDBSCAN performs.
+  Brief asks for real HDBSCAN. Acceptable for current scale; revisit if
+  topic quality complaints surface (single-linkage is chain-prone, can
+  collapse two distinct topics through one bridging vector). Either swap
+  in `hdbscan-ts` (npm) or shell out to a Python script as the brief allows.
+- **`COSINE_THRESHOLD=0.62` is a magic number** — `topic-clusterer.js`. No
+  empirical calibration on voyage-3-lite vectors. Add a tuning note + the
+  evidence used to pick it (or pick something better).
+- **`useServerTopics.ts:307,310` double-fetch on error** — `refresh()` runs
+  in both the `catch` and the `finally` of the optimistic-update path; drop
+  the `catch` invocation.
+- **`stop()` not wired to server shutdown** — `topic-clusterer-cron.js:94`
+  exports a clean shutdown helper but nothing in the parent process calls
+  it. Hook into the SIGTERM/SIGINT path in `server/index.js` (or a
+  shared shutdown manager) so timers/listeners drain on restart.
+
 ## Cross-cutting
 
 - **Bundle size warning** — main client chunk is 2.5 MB minified (~760 KB

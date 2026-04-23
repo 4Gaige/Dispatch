@@ -87,8 +87,10 @@ export function normalizeTitle(raw) {
   t = t.replace(/^["'`]+/, '').replace(/["'`]+$/, '').trim();
   if (!t) return null;
   if (t.includes('\n')) return null;
+  // Brief specifies 3-5 words. Tightened from the prior 2-8 acceptance window
+  // because the prompt itself enforces 3-5; anything outside is a model slip.
   const words = t.split(/\s+/).filter(Boolean);
-  if (words.length < 2 || words.length > 8) return null;
+  if (words.length < 3 || words.length > 5) return null;
   return t;
 }
 
