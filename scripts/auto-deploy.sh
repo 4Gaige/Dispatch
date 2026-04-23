@@ -13,7 +13,22 @@ source "$HERE/lib.sh"
 REPO=/Users/home/src/Dispatch
 POLL_INTERVAL=${DISPATCH_DEPLOY_POLL:-120}
 DEPLOY_LOG=/tmp/dispatch-auto-deploy.log
-LOCKFILE=/tmp/dispatch-main-worktree.lock
+LOCKDIR=/tmp/dispatch-main-worktree.lockdir
+
+# Portable lock via mkdir (atomic on macOS) — used because macOS lacks `flock`.
+acquire_lock() {
+  local timeout=${1:-60}
+  local waited=0
+  while ! mkdir "$LOCKDIR" 2>/dev/null; do
+    waited=$((waited + 1))
+    if [ $waited -gt $timeout ]; then
+      return 1
+    fi
+    sleep 1
+  done
+  return 0
+}
+release_lock() { rmdir "$LOCKDIR" 2>/dev/null; }
 
 echo "[$(date)] auto-deploy started pid=$$ poll=${POLL_INTERVAL}s" > "$DEPLOY_LOG"
 notify_log info "🚀 Auto-deploy watcher started"
@@ -32,10 +47,15 @@ deploy() {
   local new_sha=$1
   local old_sha=$2
 
-  (
-    # Serialize with orchestrator's main-worktree git ops
-    flock -x 9 || exit 1
+  if ! acquire_lock 60; then
+    echo "[$(date)] deploy: lock timeout (60s), will retry next poll" >> "$DEPLOY_LOG"
+    return 1
+  fi
 
+  # Guarantee lock is released even on error/exit
+  trap 'release_lock' RETURN
+
+  (
     echo "[$(date)] deploying $new_sha (from $old_sha)" >> "$DEPLOY_LOG"
 
     cd "$REPO"
@@ -80,7 +100,7 @@ deploy() {
       notify_log error "Auto-deploy: health check failed on :3002 after rebuild"
       return 1
     fi
-  ) 9>"$LOCKFILE"
+  )
 
   return $?
 }
