@@ -61,6 +61,18 @@ commit; line numbers may drift after the review PR lands.
 - **`spawn-sub-agent` has no time/output cap** — `mcp-bootstrap.js:259`. A
   runaway sub-agent could stream forever. Add a hard timeout + byte cap.
 
+## Phase 3 — Auto-naming (Haiku titler)
+
+- **`signalUpdate` re-trigger is wasteful** — `session-titler.js:222`. The
+  blank-line append fires chokidar `change` again, which queues a 60s debounce
+  + `getName` lookup that immediately short-circuits. Cheap but pointless.
+  Either set a write-then-ignore-next-event flag or invoke the WS broadcast
+  directly without retriggering chokidar.
+- **API key is read once at boot** — `session-titler.js:43`. If the user adds
+  `ANTHROPIC_API_KEY` after start (env or settings.json), the titler stays in
+  the agent-SDK fallback path until the next restart. Re-resolve on each
+  `callHaiku` invocation, or expose a runtime "reload key" hook.
+
 ## Cross-cutting
 
 - **Bundle size warning** — main client chunk is 2.5 MB minified (~760 KB
