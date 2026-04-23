@@ -98,7 +98,15 @@ function installedInConfig(config, name) {
  */
 export async function ensureRecommendedMCPs() {
     const state = await readDispatchState();
-    const config = await readClaudeConfig();
+    let config;
+    try {
+        config = await readClaudeConfig();
+    } catch (err) {
+        console.error(
+            `[mcp-bootstrap] ${CLAUDE_CONFIG_PATH} is unreadable or not valid JSON — refusing to rewrite. Fix the file and restart to re-enable bootstrap. Error: ${err.message}`,
+        );
+        return { added: [], state, skipped: true };
+    }
     if (!config.mcpServers || typeof config.mcpServers !== 'object') {
         config.mcpServers = {};
     }
@@ -161,7 +169,14 @@ router.post('/recommended/:name/toggle', async (req, res) => {
     }
     const { enabled } = req.body || {};
     try {
-        const config = await readClaudeConfig();
+        let config;
+        try {
+            config = await readClaudeConfig();
+        } catch (err) {
+            return res.status(409).json({
+                error: `${CLAUDE_CONFIG_PATH} is unreadable or not valid JSON. Fix the file before toggling MCPs: ${err.message}`,
+            });
+        }
         if (!config.mcpServers || typeof config.mcpServers !== 'object') {
             config.mcpServers = {};
         }
@@ -268,9 +283,17 @@ router.post('/spawn-sub-agent', async (req, res) => {
  */
 router.get('/session-files-touched/:projectName/:sessionId', async (req, res) => {
     const { projectName, sessionId } = req.params;
-    const safeProject = projectName.replace(/[/\\]/g, '');
-    const safeSession = sessionId.replace(/[/\\]/g, '');
-    const jsonlPath = path.join(os.homedir(), '.claude', 'projects', safeProject, `${safeSession}.jsonl`);
+    // Reject any traversal/null bytes BEFORE building the path. The subsequent
+    // path.resolve + prefix check is defense-in-depth.
+    const unsafe = /[\\/]|\0|\.\./;
+    if (unsafe.test(projectName) || unsafe.test(sessionId) || !projectName || !sessionId) {
+        return res.status(400).json({ error: 'Invalid projectName or sessionId' });
+    }
+    const projectsRoot = path.resolve(os.homedir(), '.claude', 'projects');
+    const jsonlPath = path.resolve(projectsRoot, projectName, `${sessionId}.jsonl`);
+    if (!jsonlPath.startsWith(`${projectsRoot}${path.sep}`)) {
+        return res.status(400).json({ error: 'Path escapes projects root' });
+    }
     try {
         const content = await fs.readFile(jsonlPath, 'utf8');
         const counts = new Map();

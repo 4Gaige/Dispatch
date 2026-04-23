@@ -55,13 +55,13 @@ function Toggle({
       aria-label={label}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-7 w-12 min-h-[28px] min-w-[48px] flex-shrink-0 items-center rounded-full border border-border/60 transition-colors ${
+      className={`relative inline-flex h-11 min-h-[44px] w-[52px] min-w-[52px] flex-shrink-0 items-center rounded-full border border-border/60 touch-manipulation transition-colors ${
         checked ? 'bg-primary' : 'bg-muted'
       } disabled:opacity-50`}
     >
       <span
-        className={`inline-block h-5 w-5 transform rounded-full bg-background shadow transition-transform ${
-          checked ? 'translate-x-6' : 'translate-x-1'
+        className={`inline-block h-7 w-7 transform rounded-full bg-background shadow transition-transform ${
+          checked ? 'translate-x-[22px]' : 'translate-x-1'
         }`}
       />
     </button>
