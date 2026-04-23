@@ -136,7 +136,14 @@ export async function ensureRecommendedMCPs() {
 
 async function describeRecommendedMCPs() {
     const state = await readDispatchState();
-    const config = await readClaudeConfig();
+    let config;
+    try {
+        config = await readClaudeConfig();
+    } catch {
+        // Surface the server-side error in the log but keep the API shape stable
+        // so the Settings page can still render (items show installed=false).
+        config = {};
+    }
     return Object.entries(RECOMMENDED_MCPS).map(([name, meta]) => {
         const record = state[name] || {};
         return {
