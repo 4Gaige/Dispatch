@@ -12,11 +12,12 @@
  * explicitly turned off.
  */
 
-import express from 'express';
+import { spawn } from 'child_process';
+import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
-import { promises as fs } from 'fs';
-import { spawn } from 'child_process';
+
+import express from 'express';
 
 const router = express.Router();
 
