@@ -27,11 +27,41 @@ import {
 
 const router = express.Router();
 
+const MAX_SLUG_LEN = 200;
+const MAX_SESSION_ID_LEN = 80;
+const MAX_TOPIC_LEN = 80;
+// Re-cluster runs hit Haiku once per cluster (and Voyage once for embeds),
+// so a hot endpoint is a real billing risk. One full re-cluster per hour is
+// plenty for an interactive debug button.
+const CLUSTER_THROTTLE_MS = 60 * 60 * 1000;
+const clusterThrottle = { lastRunAt: 0 };
+
 function safeSlug(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
-  if (!trimmed || trimmed.includes('/') || trimmed.includes('..')) return null;
+  if (!trimmed || trimmed.length > MAX_SLUG_LEN) return null;
+  if (trimmed.includes('/') || trimmed.includes('..') || trimmed.includes('\0')) return null;
   return trimmed;
+}
+
+function safeSessionId(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > MAX_SESSION_ID_LEN) return null;
+  if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) return null;
+  return trimmed;
+}
+
+function safeTopic(value) {
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== 'string') return { ok: false, error: 'topic must be a string or null' };
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: true, value: null };
+  if (trimmed.length > MAX_TOPIC_LEN) {
+    return { ok: false, error: `topic must be at most ${MAX_TOPIC_LEN} characters` };
+  }
+  if (/[\n\r\0]/.test(trimmed)) return { ok: false, error: 'topic must be a single line' };
+  return { ok: true, value: trimmed };
 }
 
 function buildProjectSummary(slug) {
@@ -79,18 +109,23 @@ router.get('/project/:slug', (req, res) => {
 
 router.post('/assign', (req, res) => {
   const { sessionId, projectKey, topic } = req.body || {};
-  if (!sessionId || typeof sessionId !== 'string') {
-    return res.status(400).json({ error: 'sessionId is required' });
+  const safeSession = safeSessionId(sessionId);
+  if (!safeSession) {
+    return res.status(400).json({ error: 'sessionId is required (alphanumeric, ._-, ≤80 chars)' });
   }
   const slug = safeSlug(projectKey);
   if (!slug) {
-    return res.status(400).json({ error: 'projectKey (slug) is required' });
+    return res.status(400).json({ error: 'projectKey (slug) is required (≤200 chars)' });
+  }
+  const topicCheck = safeTopic(topic ?? null);
+  if (!topicCheck.ok) {
+    return res.status(400).json({ error: topicCheck.error });
   }
   try {
     const result = setManualTopic({
-      sessionId,
+      sessionId: safeSession,
       slug,
-      topic: topic ?? null,
+      topic: topicCheck.value,
     });
     res.json({ ok: true, result, project: buildProjectSummary(slug) });
   } catch (err) {
@@ -99,6 +134,15 @@ router.post('/assign', (req, res) => {
 });
 
 router.post('/cluster', async (_req, res) => {
+  const now = Date.now();
+  const sinceLast = now - clusterThrottle.lastRunAt;
+  if (sinceLast < CLUSTER_THROTTLE_MS) {
+    return res.status(429).json({
+      error: 'Re-cluster throttled',
+      retryAfterMs: CLUSTER_THROTTLE_MS - sinceLast,
+    });
+  }
+  clusterThrottle.lastRunAt = now;
   try {
     const summary = await clusterAllProjects();
     res.json({ ok: true, summary });
@@ -126,14 +170,26 @@ router.post('/cluster/project/:slug', async (req, res) => {
 });
 
 router.post('/tag/session', async (req, res) => {
-  const { sessionId, projectKey } = req.body || {};
+  const { sessionId, projectKey, overrideManual } = req.body || {};
+  const safeSession = safeSessionId(sessionId);
   const slug = safeSlug(projectKey);
-  if (!sessionId || !slug) {
-    return res.status(400).json({ error: 'sessionId and projectKey required' });
+  if (!safeSession || !slug) {
+    return res.status(400).json({
+      error: 'sessionId (alphanumeric/._-, ≤80) and projectKey (slug, ≤200) required',
+    });
+  }
+  // Refuse to silently destroy a manual tag. Caller must opt in explicitly.
+  const existing = topicStore.getForSession(safeSession, 'claude');
+  if (existing && existing.method === 'manual' && overrideManual !== true) {
+    return res.status(409).json({
+      error: 'Session has a manual topic; pass overrideManual:true to overwrite.',
+      currentTopic: existing.topic,
+    });
   }
   try {
-    const topic = await tagSessionWithHaiku({ sessionId, slug, force: true });
-    res.json({ ok: true, sessionId, topic, project: buildProjectSummary(slug) });
+    // Forcing here is now safe because we already gated manual above.
+    const topic = await tagSessionWithHaiku({ sessionId: safeSession, slug, force: true });
+    res.json({ ok: true, sessionId: safeSession, topic, project: buildProjectSummary(slug) });
   } catch (err) {
     res.status(500).json({ error: 'Tag failed', detail: err.message });
   }
