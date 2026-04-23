@@ -286,6 +286,12 @@ function scheduleTitle(filePath) {
   state.debounceTimers.set(filePath, timer);
 }
 
+// Worst-case spend ceiling for a single backfill pass. ~$0.0005/title at the
+// brief's quoted Haiku rate puts 2000 titles at $1 — large enough to handle
+// every realistic user, small enough that a future bug enqueueing the world
+// can't bill the user without warning.
+const MAX_BACKFILL = 2000;
+
 async function scanExistingFiles() {
   let entries;
   try {
@@ -298,6 +304,7 @@ async function scanExistingFiles() {
   }
 
   let enqueued = 0;
+  let skippedOverCap = 0;
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const slugDir = path.join(PROJECTS_DIR, entry.name);
@@ -315,6 +322,10 @@ async function scanExistingFiles() {
       } catch {
         continue;
       }
+      if (enqueued >= MAX_BACKFILL) {
+        skippedOverCap++;
+        continue;
+      }
       enqueue(path.join(slugDir, f));
       enqueued++;
     }
@@ -322,6 +333,11 @@ async function scanExistingFiles() {
 
   if (enqueued) {
     console.log(`[session-titler] Backfilling ${enqueued} session title(s)`);
+  }
+  if (skippedOverCap) {
+    console.warn(
+      `[session-titler] Skipped ${skippedOverCap} session(s) past MAX_BACKFILL=${MAX_BACKFILL} cap. Re-run after the queue drains to pick them up.`,
+    );
   }
 }
 
